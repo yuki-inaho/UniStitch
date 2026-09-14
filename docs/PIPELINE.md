@@ -247,7 +247,49 @@ pixi run jupyter nbconvert --to notebook --execute --inplace notebooks/matching_
 The ONNX matcher is forced to CPU inside the notebook because the training run
 occupies GPU1; the stitching network uses GPU1.
 
-## 8. Reference metrics
+## 8. L76 greenhouse domain (near-view)
+
+The L76 tomato sessions (`/workspace/data/2026-0630-tmt4-02_OL_scepter_L76`)
+are sequential captures from a sideways-mounted 800x600 camera with aligned
+depth. Pipeline:
+
+```bash
+# 1. pairs (frame_i, frame_i+stride) with CCW90 rotation
+pixi run python tools/build_sequential_pairs.py \
+  --session .../NYX650_2026_06_30_17_46_20_1998 --output data/l76_s0 --tag s0 --stride 50 --rotate ccw90
+pixi run keypoints build --data_path data/l76_s0 --workers 2
+
+# 2. keep near-view pairs (valid depth < 1.2 m) - see also --criterion homography_inliers
+pixi run python tools/select_pairs.py \
+  --source data/l76_s0 --output data/l76_s0_near --criterion near_fraction \
+  --depth_dir .../NYX650_.../standard/mapped_depth --stride 50 --keep_fraction 0.4
+
+# 3. low-LR continued fine-tune (2 GPUs, early stopping)
+CUDA_VISIBLE_DEVICES=0,1 pixi run torchrun --nproc_per_node=2 Codes/train.py \
+  model.descriptor_dim=256 data.descriptor_pad_dim=256 \
+  data.train_path=data/l76_s0_near data.test_path=data/l76_s1_val_near \
+  checkpoint.pretrained=outputs/finetune_aliked_amuse2/checkpoints/best_epoch0003_ssim0.8649.pth \
+  optim.lr=0.0005 optim.aux_lr=1e-5 output_dir=outputs/finetune_l76_near_lowlr
+```
+
+Results (mSSIM, `unistitch-aliked-l76-near-epoch10.pth` in release `v0.1.0-aliked`):
+
+| dataset | base (UDIS ALIKED epoch 2) | L76-near fine-tune |
+| --- | --- | --- |
+| L76 near-view val (40) | 0.1295 | **0.1491** |
+| L76 val unfiltered (100) | 0.1358 | **0.1583** |
+| UDIS-D testing (40) | 0.8652 | 0.7008 |
+| classical (40) | 0.5903 | 0.4495 |
+
+Matching/pose analysis (`tools/analyze_matches_poses.py`) shows why this domain
+is hard: RANSAC homography inlier ratios are only 0.24-0.31 (vs 0.90 on
+UDIS-D), i.e. the close-range foliage has strong parallax that a global
+homography + smooth mesh cannot align. The refined GT poses are self-consistent
+(rail inlier fraction 1.0, smooth 6.1 mm/frame steps) and reproduce with the
+matches to 0.3 deg (rotation) / 2.4 deg (translation direction) at 6 cm
+baselines.
+
+## 9. Reference metrics
 
 Metrics follow the paper's protocol: masked SSIM/PSNR between the two warped
 images on their overlap (`Codes/infer.py`, same as `Codes/test.py`).
