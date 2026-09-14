@@ -1,0 +1,2 @@
+# UniStitch network
+descriptor_dim: 256 # released checkpoint: 2 + 256 stem input (SuperPoint-sized)

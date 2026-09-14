@@ -1,0 +1,7 @@
+name: stage2
+is_stage2: true
+# Finetuning from the released stage-2 checkpoint: keep the semantic backbone
+# frozen, adapt the point backbone + fusion + regression.
+freeze:
+  - feature_extractor_stage1
+  - feature_extractor_stage2

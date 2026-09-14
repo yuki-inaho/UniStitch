@@ -1,0 +1,28 @@
+# AMUSE: Anytime Muon with Stable Gradient Evaluation (arXiv:2605.22432)
+# https://github.com/kjeiun/amuse (vendored in Codes/optim/amuse.py)
+type: amuse
+
+# Muon (hidden matrix) group
+lr: 0.002
+momentum: 0.95
+
+# AdamW-style auxiliary group (biases, norms, regression heads)
+aux_lr: 5.0e-5
+beta2: 0.999
+eps: 1.0e-10
+
+weight_decay: 0.01
+weight_decay_at_y: 0.0
+
+# Interpolation schedule (see AMUSE paper)
+beta1: 0.6
+rho: 0.8
+r: 0.0
+weight_lr_power: 2.0
+warmup_ratio: 0.05
+
+# Muon update scaling, matching the auxiliary update type used above
+aux_update_type: sgd
+
+# Regression heads are not trained with Muon (see AMUSE image experiments)
+head_param_patterns: ["regressNet"]

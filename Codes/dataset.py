@@ -1,27 +1,49 @@
-from torch.utils.data import Dataset
-import numpy as np
-import cv2, torch
-import os
 import glob
-import lmdb
+import os
 import pickle
-from collections import OrderedDict
 import random
+from collections import OrderedDict
+
+import cv2
+import lmdb
+import numpy as np
+import torch
+from torch.utils.data import Dataset
+
+
+def pad_descriptor_dim(descriptors, target_dim):
+    """Zero-pad descriptors along the last dimension up to `target_dim`.
+
+    Used to feed compact descriptors (e.g. ALIKED, 128-d) into a network whose
+    input layer expects a larger descriptor dimension (e.g. SuperPoint, 256-d).
+    A `target_dim` of 0 (or <= the current dim) is a no-op.
+    """
+    if target_dim and descriptors.shape[-1] < target_dim:
+        pad = torch.zeros(
+            *descriptors.shape[:-1],
+            target_dim - descriptors.shape[-1],
+            dtype=descriptors.dtype,
+            device=descriptors.device,
+        )
+        descriptors = torch.cat([descriptors, pad], dim=-1)
+    return descriptors
 
 
 class TrainDataset(Dataset):
-    def __init__(self, data_path, max_points=2048, keypoint='superpoint'):
+    def __init__(self, data_path, max_points=2048, keypoint='superpoint', descriptor_pad_dim=0):
         self.width = 512
         self.height = 512
         self.max_points = max_points 
         self.train_path = data_path
         self.keypoint = keypoint
+        self.descriptor_pad_dim = descriptor_pad_dim
         self.lmdb_path = os.path.join(data_path, f'{self.keypoint}_lmdb')
 #        self.lmdb_path = os.path.join(data_path, f'opencv_{self.keypoint.lower()}_lmdb')
         self.datas = OrderedDict()
         
         self.descriptor_dim = {
             'matchanything': 128,
+            'aliked': 128,
             'superglue': 256, 
             'superpoint': 256, 
             'SIFT': 128,      # SIFT: 128 dim
@@ -147,6 +169,8 @@ class TrainDataset(Dataset):
     def __getitem__(self, index):
         # load image1
         input1 = cv2.imread(self.datas['input1']['image'][index])
+        if input1 is None:
+            raise RuntimeError(f"failed to read image: {self.datas['input1']['image'][index]}")
         size1 = input1.shape
         input1 = cv2.resize(input1, (self.width, self.height))
         input1 = input1.astype(dtype=np.float32)
@@ -155,6 +179,8 @@ class TrainDataset(Dataset):
         
         # load image2
         input2 = cv2.imread(self.datas['input2']['image'][index])
+        if input2 is None:
+            raise RuntimeError(f"failed to read image: {self.datas['input2']['image'][index]}")
         size2 = input2.shape
         input2 = cv2.resize(input2, (self.width, self.height))
         input2 = input2.astype(dtype=np.float32)
@@ -171,6 +197,9 @@ class TrainDataset(Dataset):
 
         point1_padded, des1_padded = self._pad_or_truncate_points(point1, des1, self.max_points)
         point2_padded, des2_padded = self._pad_or_truncate_points(point2, des2, self.max_points)
+
+        des1_padded = pad_descriptor_dim(des1_padded, self.descriptor_pad_dim)
+        des2_padded = pad_descriptor_dim(des2_padded, self.descriptor_pad_dim)
         
 #        print(f"Index {index}: Original points {point1.shape} -> Padded points {point1_padded.shape}")
 #        print(f"Index {index}: Original des1 {des1.shape} -> Padded des1_padded {des1_padded.shape}")
@@ -203,13 +232,15 @@ class TrainDataset(Dataset):
 
 
 class TestDataset(Dataset):
-    def __init__(self, data_path,  max_points=2048, keypoint='superpoint', is_finetune=False):
+    def __init__(self, data_path,  max_points=2048, keypoint='superpoint', is_finetune=False, descriptor_pad_dim=0, resize_max_side=None):
         self.width = 512
         self.height = 512
         self.max_points = max_points
         self.test_path = data_path
         self.is_finetune = is_finetune
         self.keypoint = keypoint
+        self.descriptor_pad_dim = descriptor_pad_dim
+        self.resize_max_side = resize_max_side
         self.lmdb_path = os.path.join(data_path, f'{self.keypoint}_lmdb')
 #        self.lmdb_path = os.path.join(data_path, f'opencv_{self.keypoint.lower()}_lmdb')
         self.datas = OrderedDict()
@@ -217,6 +248,7 @@ class TestDataset(Dataset):
         
         self.descriptor_dim = {
             'matchanything': 128,
+            'aliked': 128,
             'superglue': 256, 
             'superpoint': 256, 
             'SIFT': 128,      # SIFT: 128 dim
@@ -248,6 +280,16 @@ class TestDataset(Dataset):
                 self.datas[data_name]['image'].sort()
         print("Test dataset keys:", self.datas.keys())
         print("Total test samples:", len(self))
+
+    def _resize_scales(self, size):
+        """Scale factors mapping original keypoint pixels to the (optionally) resized image."""
+        if self.resize_max_side is None:
+            return 1.0, 1.0
+        long_side = max(size[0], size[1])
+        if long_side <= self.resize_max_side:
+            return 1.0, 1.0
+        scale = self.resize_max_side / long_side
+        return scale, scale
 
     def _pad_or_truncate_points(self, points, descriptors, target_num=2000):
         current_num = points.shape[0]
@@ -343,18 +385,41 @@ class TestDataset(Dataset):
     def __getitem__(self, index):
         # load image1
         input1 = cv2.imread(self.datas['input1']['image'][index])
+        if input1 is None:
+            raise RuntimeError(f"failed to read image: {self.datas['input1']['image'][index]}")
         size1 = input1.shape
+        sx1, sy1 = self._resize_scales(size1)
+        if (sx1, sy1) != (1.0, 1.0):
+            input1 = cv2.resize(
+                input1,
+                (int(round(size1[1] * sx1)), int(round(size1[0] * sy1))),
+                interpolation=cv2.INTER_AREA,
+            )
+            size1 = input1.shape
         input1 = input1.astype(dtype=np.float32)
         input1 = (input1 / 127.5) - 1.0
         
         # load image2
         input2 = cv2.imread(self.datas['input2']['image'][index])
+        if input2 is None:
+            raise RuntimeError(f"failed to read image: {self.datas['input2']['image'][index]}")
         size2 = input2.shape
+        sx2, sy2 = self._resize_scales(size2)
+        if (sx2, sy2) != (1.0, 1.0):
+            input2 = cv2.resize(
+                input2,
+                (int(round(size2[1] * sx2)), int(round(size2[0] * sy2))),
+                interpolation=cv2.INTER_AREA,
+            )
+            size2 = input2.shape
         input2 = input2.astype(dtype=np.float32)
         input2 = (input2 / 127.5) - 1.0
         
         if input1.shape != input2.shape:
             input2 = cv2.resize(input2, (input1.shape[1], input1.shape[0]), interpolation=cv2.INTER_AREA)
+            sx2 = sx2 * input1.shape[1] / size2[1]
+            sy2 = sy2 * input1.shape[0] / size2[0]
+            size2 = input2.shape
             
         input1 = np.transpose(input1, [2, 0, 1])
         input2 = np.transpose(input2, [2, 0, 1])
@@ -367,12 +432,14 @@ class TestDataset(Dataset):
   
         point1_padded, des1_padded = self._pad_or_truncate_points(point1, des1, self.max_points) #   point1, des1 # 
         point2_padded, des2_padded = self._pad_or_truncate_points(point2, des2, self.max_points) # point2, des2 # 
+        des1_padded = pad_descriptor_dim(des1_padded, self.descriptor_pad_dim)
+        des2_padded = pad_descriptor_dim(des2_padded, self.descriptor_pad_dim)
 #        print(point1.shape, point1_padded.shape, point2.shape, point2_padded.shape)
-       
-        point1_padded[...,0] = point1_padded[...,0] / (size1[1] - 1)
-        point1_padded[...,1] = point1_padded[...,1] / (size1[0] - 1)
-        point2_padded[...,0] = point2_padded[...,0] / (size2[1] - 1)
-        point2_padded[...,1] = point2_padded[...,1] / (size2[0] - 1)
+
+        point1_padded[...,0] = point1_padded[...,0] * sx1 / (size1[1] - 1)
+        point1_padded[...,1] = point1_padded[...,1] * sy1 / (size1[0] - 1)
+        point2_padded[...,0] = point2_padded[...,0] * sx2 / (size2[1] - 1)
+        point2_padded[...,1] = point2_padded[...,1] * sy2 / (size2[0] - 1)
       
         # convert to tensor
         input1_tensor = torch.tensor(input1)

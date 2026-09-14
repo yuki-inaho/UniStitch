@@ -1,0 +1,22 @@
+# Hydra entry point for UniStitch stitching inference / evaluation.
+#
+#   pixi run infer checkpoint=model_homo_stage2/epoch_best_model.pth limit=10
+#   pixi run infer checkpoint=outputs/.../checkpoints/best.pth limit=100
+defaults:
+  - _self_
+  - model: network
+  - data: udis
+
+gpu: "1"
+checkpoint: model_homo_stage2/epoch_best_model.pth
+limit: 10 # null = all pairs
+max_out_height: 8000
+max_side: 1600 # resize input images (original pixels) to bound GPU memory; null = native
+
+output_dir: null # defaults to the Hydra run directory
+
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: outputs/infer/${now:%Y-%m-%d}/${now:%H-%M-%S}

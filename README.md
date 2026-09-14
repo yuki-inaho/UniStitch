@@ -31,6 +31,11 @@ We use the UDIS dataset to train and evaluate our method. Please refer to **[UDI
 | scikit-image | >= 0.15.0 |
 | tensorboard | >= 2.9.0 |
 
+> **pixi pipeline (this fork)**: a reproducible Pixi environment, self-contained
+> ONNX keypoints (RaCo-ALIKED-LightGlue+ / ALIKED-LightGlue) and Hydra + AMUSE
+> fine-tuning are documented in **[docs/PIPELINE.md](docs/PIPELINE.md)**.
+> Quick start: `pixi install && pixi run keypoints --help && pixi run train`.
+
 ---
 
 ## 🔧 Data Preparation

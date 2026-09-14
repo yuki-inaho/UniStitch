@@ -1,0 +1,48 @@
+target-version = "py311"
+line-length = 120
+
+exclude = [
+    ".pixi",
+    "outputs",
+    "data",
+    "__pycache__",
+    "keypoint_tool/LightGlue",
+    # legacy UniStitch code; kept as-is in this work
+    "Codes/network.py",
+    "Codes/test.py",
+    "Codes/test_finetune.py",
+    "Codes/train_stage1.py",
+    "Codes/train_stage2.py",
+    "Codes/loss.py",
+    "Codes/grid_res.py",
+    "Codes/utils",
+    "keypoint_tool/get_keypoint_from_opencv.py",
+    # vendored verbatim (kjeiun/amuse, Apache-2.0)
+    "Codes/optim/amuse.py",
+]
+
+[lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "SIM", # flake8-simplify
+]
+ignore = [
+    "E501", # long lines are handled by the formatter where possible
+]
+
+[lint.per-file-ignores]
+"Codes/dataset.py" = ["W291", "W293", "E401"] # legacy formatting kept minimal
+# jaxtyping string annotations are not understood by ruff
+"keypoint_tool/onnx_models.py" = ["F722", "F821", "UP037"]
+"keypoint_tool/onnx_keypoint_tool.py" = ["F722", "F821", "UP037"]
+"keypoint_tool/export_aliked_descriptor.py" = ["F722", "F821", "UP037"]
+
+[format]
+quote-style = "double"
+exclude = ["Codes/dataset.py"] # avoid reformatting untouched legacy lines

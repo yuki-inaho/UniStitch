@@ -1,0 +1,21 @@
+# datasets / downloaded artifacts
+data/
+outputs/
+summary/
+ave_fusion/
+ave_other_fusion/
+
+# pixi environment
+.pixi/
+
+# tooling caches
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.ty_cache/
+.pytest_cache/
+
+# checkpoints (download separately, see README)
+model_homo_stage1/
+model_homo_stage2/*.pth
+*.pth

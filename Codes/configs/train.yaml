@@ -1,0 +1,50 @@
+# Hydra entry point for UniStitch training / fine-tuning.
+#
+#   pixi run train                                   # stage2 fine-tune (AMUSE)
+#   pixi run train optim=adamw epochs=20
+#   pixi run train checkpoint.pretrained=model_homo_stage2/epoch_best_model.pth
+#   pixi run train data.train_path=data/UDIS-D/training data.keypoint=aliked
+#
+# TensorBoard: `pixi run tensorboard` (logs under outputs/**/tensorboard).
+defaults:
+  - _self_
+  - model: network
+  - data: udis
+  - optim: amuse
+  - stage: stage2
+
+seed: 114514
+gpu: "1" # CUDA_VISIBLE_DEVICES; GPU0 may be busy
+epochs: 10
+
+checkpoint:
+  resume: null # full training state (model + optimizer + epoch)
+  pretrained: null # model weights only, e.g. model_homo_stage2/epoch_best_model.pth
+  strict: false
+
+log:
+  tensorboard: true
+  every_n_steps: 50
+  images_every_n_steps: 1000
+  grad_norm: true
+
+val:
+  every_n_epochs: 1
+  udis_max_batches: 40
+  others_max_batches: 40
+  max_out_height: 4000
+  max_side: 1600 # resize validation images (original pixels) to bound GPU memory
+  log_images: true
+
+save:
+  # Only the K best checkpoints (by validation SSIM) are kept on disk.
+  keep_best_k: 3
+  keep_last: true # last.pth, used by checkpoint.resume
+
+output_dir: null # defaults to the Hydra run directory
+
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
