@@ -34,6 +34,7 @@ from typing import Any
 import hydra
 import numpy as np
 from beartype import beartype
+from checkpoint_utils import load_model_state
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 
@@ -141,31 +142,6 @@ def freeze_modules(net: Any, patterns: list[str]) -> None:
     trainable = sum(param.numel() for param in net.parameters() if param.requires_grad)
     total = sum(param.numel() for param in net.parameters())
     print(f"trainable parameters: {trainable:,}/{total:,}")
-
-
-def load_model_state(net: Any, state: dict[str, Any], strict: bool) -> None:
-    """Load model weights, reporting keys whose shape does not fit."""
-    model_state = net.state_dict()
-    filtered = {
-        key: value
-        for key, value in state.items()
-        if key in model_state and tuple(value.shape) == tuple(model_state[key].shape)
-    }
-    skipped = [
-        f"{key} {tuple(value.shape)} != {tuple(model_state[key].shape)}"
-        for key, value in state.items()
-        if key in model_state and tuple(value.shape) != tuple(model_state[key].shape)
-    ]
-    missing, unexpected = net.load_state_dict(filtered, strict=False)
-    if skipped:
-        print("checkpoint tensors skipped (shape mismatch):")
-        for entry in skipped[:8]:
-            print(f"  {entry}")
-    if strict and (missing or unexpected or skipped):
-        raise RuntimeError(
-            f"strict load failed: missing={len(missing)} unexpected={len(unexpected)} skipped={len(skipped)}"
-        )
-    print(f"loaded {len(filtered)}/{len(state)} tensors (missing {len(missing)}, unexpected {len(unexpected)})")
 
 
 class BestCheckpoints:

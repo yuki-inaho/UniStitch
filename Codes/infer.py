@@ -49,16 +49,12 @@ def mask_psnr(image1: np.ndarray, image2: np.ndarray, mask: np.ndarray) -> float
 
 
 def load_checkpoint(net: Any, path: str, torch_module: Any) -> None:
+    from checkpoint_utils import load_model_state
+
     checkpoint = torch_module.load(path, map_location="cpu", weights_only=False)
     state = checkpoint["model"] if isinstance(checkpoint, dict) and "model" in checkpoint else checkpoint
-    model_state = net.state_dict()
-    filtered = {
-        key: value
-        for key, value in state.items()
-        if key in model_state and tuple(value.shape) == tuple(model_state[key].shape)
-    }
-    net.load_state_dict(filtered, strict=False)
-    print(f"loaded {len(filtered)}/{len(state)} tensors from {path}")
+    load_model_state(net, state)
+    print(f"checkpoint: {path}")
 
 
 def run_dataset(

@@ -37,7 +37,7 @@ ty = "*"
 [tasks]
 lint = "ruff check Codes keypoint_tool"
 format = "ruff format Codes keypoint_tool"
-typecheck = "ty check Codes/train.py Codes/dataset.py keypoint_tool/onnx_models.py keypoint_tool/onnx_keypoint_tool.py keypoint_tool/export_aliked_descriptor.py"
+typecheck = "ty check Codes/train.py Codes/infer.py Codes/dataset.py Codes/checkpoint_utils.py keypoint_tool/onnx_models.py keypoint_tool/onnx_keypoint_tool.py keypoint_tool/export_aliked_descriptor.py"
 train = "python Codes/train.py"
 infer = "python Codes/infer.py"
 tensorboard = "tensorboard --logdir outputs"

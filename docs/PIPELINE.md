@@ -103,14 +103,27 @@ the classical pairs come from [RopStitch](https://github.com/MmelodYy/RopStitch)
 
 ## 5. Fine-tuning with AMUSE (Hydra)
 
-The released checkpoint expects 256-d descriptors; ALIKED emits 128-d. The
-dataset zero-pads descriptors to `data.descriptor_pad_dim=256`
-(`Codes/dataset.py:pad_descriptor_dim`), so every pretrained weight loads and
-the point backbone learns to use the first 128 channels.
+The released checkpoint expects 256-d descriptors; ALIKED emits 128-d. Two
+warm-start strategies are supported:
+
+**A. Zero-padded 256-d stem** (default) - the dataset zero-pads descriptors to
+`data.descriptor_pad_dim=256` (`Codes/dataset.py:pad_descriptor_dim`), so every
+pretrained weight loads as-is.
+
+**C. Native 128-d stem** - build `model.descriptor_dim=128` and
+`data.descriptor_pad_dim=0`; `Codes/checkpoint_utils.py` initialises the
+(64,130,1) stem from the pretrained (64,258,1) stem (xy columns + first 128
+descriptor columns). This is parameter-equivalent to A at step 0 (the padded
+columns receive zero input), with no dead channels.
 
 ```bash
-# fine-tune stage 2 from the released checkpoint on GPU 1 (default)
+# A: fine-tune stage 2 from the released checkpoint on GPU 1 (default)
 pixi run train checkpoint.pretrained=model_homo_stage2/epoch_best_model.pth
+
+# C: native 128-d ALIKED descriptors (truncated-stem warm start)
+pixi run train model.descriptor_dim=128 data.descriptor_pad_dim=0 \
+  checkpoint.pretrained=model_homo_stage2/epoch_best_model.pth \
+  output_dir=outputs/finetune_aliked_c128
 
 # classic AdamW baseline
 pixi run train optim=adamw optim.lr=1e-4 epochs=20
@@ -177,3 +190,19 @@ pixi run jupyter nbconvert --to notebook --execute --inplace notebooks/matching_
 
 The ONNX matcher is forced to CPU inside the notebook because the training run
 occupies GPU1; the stitching network uses GPU1.
+
+## 8. Reference metrics (UDIS-D testing, 1,105 pairs)
+
+Metrics follow the paper's protocol: masked SSIM/PSNR between the two warped
+images on their overlap (`Codes/infer.py`, same as `Codes/test.py`).
+
+| model | mSSIM | mPSNR |
+| --- | --- | --- |
+| released checkpoint, ALIKED descriptors zero-padded to 256-d (warm start) | 0.8070 | 24.87 |
+| fine-tune A, end of epoch 0 | 0.8021 | 24.76 |
+| UniStitch paper (SuperPoint descriptors) | 0.813 | 25.07 |
+
+`Codes/dataset.py` pairs `input1`/`input2` by file name; UDIS-D testing
+`input1` is missing `000001.jpg`, so index-based pairing (the original
+behaviour) shifted every validation pair by one and produced invalid metrics.
+Training data was unaffected (names are aligned there).
