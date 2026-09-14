@@ -151,7 +151,17 @@ pixi run train optim=adamw optim.lr=1e-4 epochs=20
 
 # resume (AMUSE schedule-free state is restored as well)
 pixi run train checkpoint.resume=outputs/2026-09-14/17-30-00/checkpoints/last.pth
+
+# 2-GPU data-parallel (DDP) training of a single model
+CUDA_VISIBLE_DEVICES=0,1 pixi run torchrun --nproc_per_node=2 --master_port=29517 Codes/train.py \
+  model.descriptor_dim=128 data.descriptor_pad_dim=0 \
+  checkpoint.pretrained=model_homo_stage2/epoch_best_model.pth \
+  data.batch_size=4 output_dir=outputs/finetune_aliked_ddp128
 ```
+
+Distributed runs must pass an explicit `output_dir` (all ranks share it); `gpu`
+is ignored under `torchrun` (ranks pick their own device), validation and
+checkpointing happen on rank 0, and early stopping is broadcast to all ranks.
 
 Defaults live in `Codes/configs/` (`train.yaml`, `data/udis.yaml`,
 `optim/amuse.yaml`, `optim/adamw.yaml`, `stage/stage2.yaml`); everything can be
@@ -231,6 +241,7 @@ Full UDIS-D testing set (1,105 pairs, name-paired):
 | --- | --- | --- |
 | released checkpoint, ALIKED descriptors zero-padded to 256-d (warm start) | 0.8070 | 24.87 |
 | fine-tune A, end of epoch 0 | 0.8021 | 24.76 |
+| fine-tune A, end of epoch 2 | 0.8042 | 24.84 |
 | UniStitch paper (SuperPoint descriptors) | 0.813 | 25.07 |
 
 First 40 UDIS-D testing pairs (the validation subset used during training):

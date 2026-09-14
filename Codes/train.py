@@ -237,23 +237,39 @@ def validate(
 
 def train(cfg: DictConfig) -> None:
     os.environ.setdefault("CUDA_DEVICES_ORDER", "PCI_BUS_ID")
-    if cfg.get("gpu") is not None:
+    distributed = int(os.environ.get("WORLD_SIZE", "1")) > 1
+    if not distributed and cfg.get("gpu") is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = str(cfg.gpu)
 
     import torch
+    import torch.distributed as dist
     from dataset import TestDataset, TrainDataset
     from network import Network, build_model
+    from torch.nn.parallel import DistributedDataParallel
     from torch.utils.data import DataLoader
+    from torch.utils.data.distributed import DistributedSampler
     from torch.utils.tensorboard import SummaryWriter
 
+    if distributed:
+        torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+        dist.init_process_group(backend="nccl")
+    is_main = (not distributed) or dist.get_rank() == 0
+    log = print if is_main else (lambda *args, **kwargs: None)
+
     run_dir = Path(cfg.output_dir) if cfg.output_dir else Path(HydraConfig.get().runtime.output_dir)
+    if distributed and not cfg.output_dir:
+        raise SystemExit("distributed runs require an explicit output_dir=... (all ranks must share it)")
     run_dir.mkdir(parents=True, exist_ok=True)
-    OmegaConf.save(cfg, run_dir / "config.yaml")
-    print(f"run directory: {run_dir}")
+    if is_main:
+        OmegaConf.save(cfg, run_dir / "config.yaml")
+    log(f"run directory: {run_dir}")
 
     setup_seed(int(cfg.seed))
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"device: {device} (CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES')})")
+    if distributed:
+        device = torch.device("cuda", int(os.environ["LOCAL_RANK"]))
+    else:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    log(f"device: {device} (distributed={distributed}, CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES')})")
 
     # --- data -----------------------------------------------------------------
     train_data = TrainDataset(
@@ -262,11 +278,13 @@ def train(cfg: DictConfig) -> None:
         keypoint=cfg.data.keypoint,
         descriptor_pad_dim=cfg.data.descriptor_pad_dim,
     )
+    train_sampler = DistributedSampler(train_data, shuffle=True, drop_last=True) if distributed else None
     train_loader = DataLoader(
         train_data,
         batch_size=cfg.data.batch_size,
         num_workers=cfg.data.num_workers,
-        shuffle=True,
+        shuffle=train_sampler is None,
+        sampler=train_sampler,
         drop_last=True,
     )
     test_loaders = {}
@@ -322,7 +340,14 @@ def train(cfg: DictConfig) -> None:
             scheduler.last_epoch = start_epoch
         print("resumed optimizer state")
 
-    writer = SummaryWriter(log_dir=str(run_dir / "tensorboard")) if cfg.log.tensorboard else None
+    if distributed:
+        # Wrap after the optimizer is built so parameter references stay valid.
+        net = DistributedDataParallel(net, device_ids=[device.index])
+        raw_net = net.module
+    else:
+        raw_net = net
+
+    writer = SummaryWriter(log_dir=str(run_dir / "tensorboard")) if (cfg.log.tensorboard and is_main) else None
     if writer is not None:
         print(f"tensorboard logdir: {run_dir / 'tensorboard'}")
 
@@ -342,7 +367,9 @@ def train(cfg: DictConfig) -> None:
 
     try:
         for epoch in range(start_epoch, int(cfg.epochs)):
-            print(f"start epoch {epoch}")
+            log(f"start epoch {epoch}")
+            if train_sampler is not None:
+                train_sampler.set_epoch(epoch)
             if is_amuse:
                 optimizer.train()
             net.train()
@@ -366,7 +393,7 @@ def train(cfg: DictConfig) -> None:
                 if glob_iter % score_interval == 0:
                     count = max(1, loss_count)
                     average = {key: value / count for key, value in loss_sums.items()}
-                    print(
+                    log(
                         f"epoch {epoch} iter {glob_iter}: loss={average['total']:.4f} "
                         f"(overlap {average['overlap']:.4f}, nonoverlap {average['nonoverlap']:.4f}, "
                         f"df {average['df']:.4f}) grad_norm={float(grad_norm):.3f}"
@@ -392,7 +419,7 @@ def train(cfg: DictConfig) -> None:
                     loss_count = 0
                 glob_iter += 1
 
-            print(f"epoch {epoch} done ({time.time() - start_time:.0f}s), lr={lr_values}")
+            log(f"epoch {epoch} done ({time.time() - start_time:.0f}s), lr={lr_values}")
             if scheduler is not None:
                 scheduler.step()
 
@@ -401,11 +428,11 @@ def train(cfg: DictConfig) -> None:
                 optimizer.eval()
             net.eval()
             scores: dict[str, float] = {}
-            if (epoch + 1) % int(cfg.val.every_n_epochs) == 0:
+            if is_main and (epoch + 1) % int(cfg.val.every_n_epochs) == 0:
                 for name, loader in test_loaders.items():
                     max_batches = int(cfg.val.udis_max_batches if name == "udis" else cfg.val.others_max_batches)
                     score = validate(
-                        net,
+                        raw_net,
                         loader,
                         max_batches=max_batches,
                         max_out_height=int(cfg.val.max_out_height),
@@ -416,62 +443,72 @@ def train(cfg: DictConfig) -> None:
                         log_images=bool(cfg.val.log_images),
                     )
                     scores[name] = score
-                    print(f"epoch {epoch}: validation SSIM [{name}] = {score:.4f}")
+                    log(f"epoch {epoch}: validation SSIM [{name}] = {score:.4f}")
                     if writer is not None:
                         writer.add_scalar(f"val/ssim_{name}", score, epoch + 1)
+            if distributed:
+                dist.barrier()
 
             selection = scores.get("udis", scores.get("others", float("nan")))
             early_stop_cfg = cfg.get("early_stop")
             min_delta = float(early_stop_cfg.get("min_delta", 0.0)) if early_stop_cfg else 0.0
             patience = int(early_stop_cfg.get("patience", 0)) if early_stop_cfg else 0
-            state = {
-                "model": net.state_dict(),
-                "optimizer": optimizer.state_dict(),
-                "epoch": epoch + 1,
-                "glob_iter": glob_iter,
-                "best_ssim": max(best_score, selection if np.isfinite(selection) else 0.0),
-                "epochs_without_improvement": epochs_without_improvement,
-                "cfg": OmegaConf.to_container(cfg, resolve=True),
-            }
-            if np.isfinite(selection) and selection > best_score + min_delta:
-                best_score = selection
-                epochs_without_improvement = 0
-                state["epochs_without_improvement"] = 0
-                path = keep_best.offer(selection, epoch + 1, state, torch)
-                print(f"saved best checkpoint: {path.name}")
-            elif np.isfinite(selection):
-                epochs_without_improvement += 1
-                state["epochs_without_improvement"] = epochs_without_improvement
-                if patience:
-                    print(
-                        f"epoch {epoch}: no improvement (+{min_delta}), patience {epochs_without_improvement}/{patience}"
-                    )
-            if writer is not None:
-                writer.add_scalar("val/epochs_without_improvement", epochs_without_improvement, epoch + 1)
-            if cfg.save.keep_last:
-                torch.save(state, run_dir / "checkpoints" / "last.pth")
+            if is_main:
+                state = {
+                    "model": raw_net.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "epoch": epoch + 1,
+                    "glob_iter": glob_iter,
+                    "best_ssim": max(best_score, selection if np.isfinite(selection) else 0.0),
+                    "epochs_without_improvement": epochs_without_improvement,
+                    "cfg": OmegaConf.to_container(cfg, resolve=True),
+                }
+                if np.isfinite(selection) and selection > best_score + min_delta:
+                    best_score = selection
+                    epochs_without_improvement = 0
+                    state["epochs_without_improvement"] = 0
+                    path = keep_best.offer(selection, epoch + 1, state, torch)
+                    log(f"saved best checkpoint: {path.name}")
+                elif np.isfinite(selection):
+                    epochs_without_improvement += 1
+                    state["epochs_without_improvement"] = epochs_without_improvement
+                    if patience:
+                        log(
+                            f"epoch {epoch}: no improvement (+{min_delta}), "
+                            f"patience {epochs_without_improvement}/{patience}"
+                        )
+                if writer is not None:
+                    writer.add_scalar("val/epochs_without_improvement", epochs_without_improvement, epoch + 1)
+                if cfg.save.keep_last:
+                    torch.save(state, run_dir / "checkpoints" / "last.pth")
 
             if is_amuse:
                 optimizer.train()
 
+            stop = torch.zeros(1, device=device)
             if (
-                early_stop_cfg is not None
+                is_main
+                and early_stop_cfg is not None
                 and early_stop_cfg.get("enabled", False)
                 and patience
                 and epochs_without_improvement >= patience
             ):
-                print(
+                log(
                     f"early stopping after epoch {epoch} ({epochs_without_improvement} validations without improvement)"
                 )
+                stop[0] = 1.0
+            if distributed:
+                dist.broadcast(stop, src=0)
+            if stop.item() > 0:
                 break
     except KeyboardInterrupt:
-        print("interrupted; saving last.pth")
+        log("interrupted; saving last.pth")
         if is_amuse:
             optimizer.eval()  # store the evaluation (averaged) iterate, as elsewhere
-        if cfg.save.keep_last:
+        if cfg.save.keep_last and is_main:
             torch.save(
                 {
-                    "model": net.state_dict(),
+                    "model": raw_net.state_dict(),
                     "optimizer": optimizer.state_dict(),
                     "epoch": start_epoch,
                     "glob_iter": glob_iter,
@@ -484,7 +521,9 @@ def train(cfg: DictConfig) -> None:
     finally:
         if writer is not None:
             writer.close()
-    print(f"training finished; best validation SSIM = {best_score:.4f}")
+        if distributed:
+            dist.destroy_process_group()
+    log(f"training finished; best validation SSIM = {best_score:.4f}")
 
 
 @hydra.main(version_base=None, config_path="configs", config_name="train")
