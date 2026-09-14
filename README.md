@@ -33,7 +33,8 @@ We use the UDIS dataset to train and evaluate our method. Please refer to **[UDI
 
 > **pixi pipeline (this fork)**: a reproducible Pixi environment, self-contained
 > ONNX keypoints (RaCo-ALIKED-LightGlue+ / ALIKED-LightGlue), Hydra + AMUSE
-> fine-tuning and a gradio demo are documented in **[docs/PIPELINE.md](docs/PIPELINE.md)**.
+> fine-tuning and a gradio demo comparing MAGSAC++ against UniStitch are
+> documented in **[docs/PIPELINE.md](docs/PIPELINE.md)**.
 > Quick start: `pixi install && pixi run download-models && pixi run app`
 > (GTX 1070/Pascal users: the `gtx1070` branch pins CUDA 12.6 wheels).
 

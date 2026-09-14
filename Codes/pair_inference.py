@@ -40,6 +40,7 @@ for _extra in (REPO_ROOT / "Codes", REPO_ROOT / "keypoint_tool"):
 from checkpoint_utils import infer_descriptor_dim, load_model_state  # noqa: E402
 from dataset import pad_descriptor_dim  # noqa: E402
 from network import Network, build_output_model  # noqa: E402
+from stitch_common import masked_ssim_psnr, overlap_mask  # noqa: E402
 
 MODEL_DIR = REPO_ROOT / "model_homo_stage2"
 DEFAULT_CHECKPOINT = MODEL_DIR / "unistitch-aliked-zeropad-epoch2-ssim0.8649.pth"
@@ -168,33 +169,33 @@ def prepare_batch(
     ]
 
 
-def fuse_warps(output_tps_ref: torch.Tensor, output_tps_tgt: torch.Tensor) -> tuple[np.ndarray, np.ndarray]:
-    """Blend the two warped views (BGR order, same as ``Codes/infer.py``)."""
+def warps_to_numpy(
+    output_tps_ref: torch.Tensor,
+    output_tps_tgt: torch.Tensor,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Convert network warps/masks to BGR uint8 images on the common canvas."""
     ref = output_tps_ref[0, 0:3].detach().float().cpu().numpy().transpose(1, 2, 0) * 127.5
     tgt = output_tps_tgt[0, 0:3].detach().float().cpu().numpy().transpose(1, 2, 0) * 127.5
+    mask_ref = output_tps_ref[0, 3:6].detach().float().cpu().numpy().max(axis=0)
+    mask_tgt = output_tps_tgt[0, 3:6].detach().float().cpu().numpy().max(axis=0)
+    return (
+        np.clip(ref, 0, 255).astype(np.uint8),
+        np.clip(tgt, 0, 255).astype(np.uint8),
+        (mask_ref > 0.5).astype(np.uint8) * 255,
+        (mask_tgt > 0.5).astype(np.uint8) * 255,
+    )
+
+
+def fuse_overlap_bgr(ref_bgr: np.ndarray, tgt_bgr: np.ndarray) -> np.ndarray:
+    """Overlap-weighted alpha blend (the network's own fusion, ``Codes/infer.py``)."""
+    ref = ref_bgr.astype(np.float32)
+    tgt = tgt_bgr.astype(np.float32)
     fused = ref * (ref / (ref + tgt + 1e-6)) + tgt * (tgt / (ref + tgt + 1e-6))
-    fused_bgr = np.clip(fused, 0, 255).astype(np.uint8)
-    return fused_bgr, cv2.cvtColor(fused_bgr, cv2.COLOR_BGR2RGB)
-
-
-def overlap_metrics(output_tps_ref: torch.Tensor, output_tps_tgt: torch.Tensor) -> tuple[float, float]:
-    """Masked SSIM/PSNR on the overlap, identical to ``Codes/infer.py``."""
-    from skimage.metrics import structural_similarity
-
-    ref = output_tps_ref[0, 0:3].detach().float().cpu().numpy().transpose(1, 2, 0) * 127.5
-    tgt = output_tps_tgt[0, 0:3].detach().float().cpu().numpy().transpose(1, 2, 0) * 127.5
-    mask = (output_tps_ref[0, 3:6] * output_tps_tgt[0, 3:6]).detach().float().cpu().numpy().transpose(1, 2, 0)
-    _, ssim = structural_similarity(ref * mask, tgt * mask, data_range=255, channel_axis=2, full=True)
-    ssim = float(np.sum(ssim * mask) / (np.sum(mask) + 1e-6))
-    ref_n = ref * mask / 255.0
-    tgt_n = tgt * mask / 255.0
-    rmse = np.sqrt(np.sum((ref_n - tgt_n) ** 2) / (mask.sum() + 1e-6))
-    psnr = float(20 * np.log10(1.0 / rmse)) if rmse > 0 else float("inf")
-    return ssim, psnr
+    return np.clip(fused, 0, 255).astype(np.uint8)
 
 
 class UniStitcher:
-    """Cached uniStitch network + ONNX matcher for repeated stitches."""
+    """Cached UniStitch network + ONNX matcher for repeated stitches."""
 
     def __init__(
         self,
@@ -209,6 +210,60 @@ class UniStitcher:
         self.net, self.descriptor_dim = load_network(checkpoint_path, device=device)
         self.matcher = RaCoAlikedLightGlue(num_threads=num_threads, providers=providers)
 
+    def match(
+        self,
+        image0_rgb: np.ndarray,
+        image1_rgb: np.ndarray,
+        *,
+        max_side: int | None = None,
+    ) -> dict[str, np.ndarray]:
+        """Shared keypoint matching (run once and pass the result to both methods)."""
+        return self.matcher.match_pair(image0_rgb, image1_rgb, max_side=max_side)
+
+    def stitch_with_match(
+        self,
+        image0_rgb: np.ndarray,
+        image1_rgb: np.ndarray,
+        match: dict[str, np.ndarray],
+        *,
+        max_out_height: int = DEFAULT_MAX_OUT_HEIGHT,
+    ) -> dict[str, Any]:
+        """Network alignment/warping only (no finish); the caller applies the seam."""
+        num_matches = int(len(match["keypoints0"]))
+        if num_matches == 0:
+            raise RuntimeError("keypoint matching found no matches between the two images")
+
+        inputs = prepare_batch(image0_rgb, image1_rgb, match, descriptor_dim=self.descriptor_dim)
+        inputs = [value.to(next(self.net.parameters()).device) for value in inputs]
+        started = time.time()
+        with torch.no_grad():
+            batch_out, flag_check = build_output_model(self.net, *inputs, max_out_height=max_out_height)
+        network_seconds = time.time() - started
+        if not flag_check:
+            return {
+                "method": "unistitch",
+                "flag_check": False,
+                "matches": num_matches,
+                "network_seconds": network_seconds,
+            }
+        ref_bgr, tgt_bgr, mask_ref, mask_tgt = warps_to_numpy(
+            batch_out["output_tps_ref"],
+            batch_out["output_tps_tgt"],
+        )
+        overlap = overlap_mask(mask_ref, mask_tgt)
+        ssim, psnr = masked_ssim_psnr(ref_bgr, tgt_bgr, overlap)
+        return {
+            "method": "unistitch",
+            "flag_check": True,
+            "warped_bgr": (ref_bgr, tgt_bgr),
+            "masks": (mask_ref, mask_tgt),
+            "matches": num_matches,
+            "ssim": ssim,
+            "psnr": psnr,
+            "overlap_fraction": float((overlap > 0).mean()),
+            "network_seconds": network_seconds,
+        }
+
     def stitch(
         self,
         image0_rgb: np.ndarray,
@@ -217,34 +272,21 @@ class UniStitcher:
         max_side: int | None = DEFAULT_MAX_SIDE,
         max_out_height: int = DEFAULT_MAX_OUT_HEIGHT,
     ) -> dict[str, Any]:
-        """Stitch an RGB pair; returns fused images, metrics and timing."""
+        """Legacy convenience: match + network + the model's own alpha fusion."""
         started = time.time()
-        match = self.matcher.match_pair(image0_rgb, image1_rgb, max_side=max_side)
-        num_matches = int(len(match["keypoints0"]))
-        if num_matches == 0:
-            raise RuntimeError("keypoint matching found no matches between the two images")
-
-        inputs = prepare_batch(image0_rgb, image1_rgb, match, descriptor_dim=self.descriptor_dim)
-        inputs = [value.to(next(self.net.parameters()).device) for value in inputs]
-        with torch.no_grad():
-            batch_out, flag_check = build_output_model(self.net, *inputs, max_out_height=max_out_height)
-        if not flag_check:
-            return {
-                "flag_check": False,
-                "matches": num_matches,
+        match = self.match(image0_rgb, image1_rgb, max_side=max_side)
+        result = self.stitch_with_match(image0_rgb, image1_rgb, match, max_out_height=max_out_height)
+        if not result["flag_check"]:
+            result["elapsed"] = time.time() - started
+            return result
+        ref_bgr, tgt_bgr = result["warped_bgr"]
+        fused_bgr = fuse_overlap_bgr(ref_bgr, tgt_bgr)
+        result.update(
+            {
+                "fused_bgr": fused_bgr,
+                "fused_rgb": cv2.cvtColor(fused_bgr, cv2.COLOR_BGR2RGB),
+                "output_size": (fused_bgr.shape[1], fused_bgr.shape[0]),
                 "elapsed": time.time() - started,
             }
-        output_ref = batch_out["output_tps_ref"]
-        output_tgt = batch_out["output_tps_tgt"]
-        fused_bgr, fused_rgb = fuse_warps(output_ref, output_tgt)
-        ssim, psnr = overlap_metrics(output_ref, output_tgt)
-        return {
-            "flag_check": True,
-            "fused_bgr": fused_bgr,
-            "fused_rgb": fused_rgb,
-            "matches": num_matches,
-            "ssim": ssim,
-            "psnr": psnr,
-            "output_size": (fused_rgb.shape[1], fused_rgb.shape[0]),
-            "elapsed": time.time() - started,
-        }
+        )
+        return result

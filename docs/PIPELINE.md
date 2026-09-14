@@ -205,21 +205,34 @@ pixi run jupyter nbconvert --to notebook --execute --inplace notebooks/matching_
 The ONNX matcher is forced to CPU inside the notebook because the training run
 occupies GPU1; the stitching network uses GPU1.
 
-## 8. Gradio demo
+## 8. Gradio comparison demo
 
-The demo stitches an arbitrary RGB pair in-process (ONNX matcher + network, see
-`Codes/pair_inference.py`):
+`pixi run download-models && pixi run app` opens a comparison UI (http://127.0.0.1:7860).
+Both pipelines run on one commonly resized pair, consume **one shared keypoint
+matching result** and use **the same finish**: a GraphCut seam cut where every
+pixel is copied from exactly one source (no feathering / no alpha blending).
 
-```bash
-pixi run download-models   # once
-pixi run app               # http://127.0.0.1:7860
-```
+| step | classical column | UniStitch column |
+| --- | --- | --- |
+| matching | RaCo-ALIKED-LightGlue+ ONNX (shared, run once) | same |
+| alignment | MAGSAC++ homography (`cv2.USAC_MAGSAC`) | network homography + TPS mesh |
+| finish | `cv2.detail.SeamFinder` GraphCut (shared code path) | same |
+
+Modules: `Codes/stitch_common.py` (resize, seam cut, masked metrics,
+diagnostics), `Codes/classical_stitch.py` (MAGSAC++ baseline),
+`Codes/pair_inference.py` (network), `app.py` (UI).
 
 - `samples/left.png` / `samples/right.png` are a deterministic procedural pair
-  (`pixi run samples` regenerates them); the UI resizes the inputs for matching
-  via the "最大辺" slider and serves/downloads the result as PNG.
-- Tests: `pixi run test-e2e` (GPU stitch test on the sample pair),
-  `pixi run test-app` (app layout/helpers) or `pixi run test` (everything).
+  (`pixi run samples` regenerates them); each column shows its own PNG result
+  and timing breakdown (shared matching / alignment / network / seam).
+- 「位置合わせを確認」 offers 採用領域 (seam + source tint), 変形A / 変形B,
+  50%重ね (double-image diagnostic) and 対応点 (shared matches with MAGSAC++
+  inliers highlighted).
+- A failure in one column (no homography, warp too large, ...) is reported in
+  that column while the other result is still shown.
+- Tests: `pixi run test-e2e` (GPU network e2e), `pixi run test-app`
+  (comparison handler + deadlock regression), `pixi run test` (everything,
+  including the `tests/test_classical_stitch.py` baseline tests).
 
 ## 9. Reference metrics (UDIS-D testing, 1,105 pairs)
 
