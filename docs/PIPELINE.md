@@ -23,7 +23,9 @@ Key tasks:
 | `pixi run test` | fast pytest smoke tests for the ONNX pipeline |
 | `pixi run lint` / `format` / `typecheck` | Ruff, Ruff format, `ty` |
 
-## 2. Pretrained checkpoint
+## 2. Checkpoints
+
+Released SuperPoint stage-2 weights (baseline / warm start):
 
 ```bash
 mkdir -p model_homo_stage2
@@ -34,6 +36,25 @@ curl -L -o model_homo_stage2/epoch_best_model.pth \
 The released checkpoint is a stage-2 model trained with 256-d SuperPoint
 descriptors (`point_backbone.pointnext_feat.encoder.stem.0.weight` has shape
 `(64, 258, 1)`).
+
+Fine-tuned ALIKED checkpoints produced by this fork are attached to the GitHub
+release [`v0.1.0-aliked`](https://github.com/yuki-inaho/UniStitch/releases/tag/v0.1.0-aliked):
+
+| asset | description |
+| --- | --- |
+| `unistitch-aliked-zeropad-epoch0.pth` | end of epoch 0 (AMUSE averaged iterate) |
+| `unistitch-aliked-zeropad-epoch2-ssim0.8649.pth` | end of epoch 2 (40-pair validation mSSIM 0.8649) |
+
+Both are model-only state dicts that warm-start from the released checkpoint and
+expect **ALIKED 128-d descriptors zero-padded to 256-d**
+(`data.descriptor_pad_dim=256`). Load them with
+`Codes/checkpoint_utils.py:load_model_state` (raw state dicts and
+`{"model": ...}` wrappers are both accepted):
+
+```bash
+curl -L -O https://github.com/yuki-inaho/UniStitch/releases/download/v0.1.0-aliked/unistitch-aliked-zeropad-epoch2-ssim0.8649.pth
+pixi run infer checkpoint=unistitch-aliked-zeropad-epoch2-ssim0.8649.pth limit=10
+```
 
 ## 3. Self-contained ONNX keypoints
 
@@ -178,9 +199,12 @@ VRAM).
 ## 7. Notebooks
 
 `notebooks/matching_and_stitching_epoch0.ipynb` demonstrates matching
-(RaCo-ALIKED-LightGlue+, ONNX) and stitching (fine-tuned vs. released baseline)
-on sample UDIS-D/classical pairs using the end-of-epoch-0 checkpoint. Outputs
-are embedded; figures are also written to `notebooks/figures/`.
+(RaCo-ALIKED-LightGlue+, ONNX) and stitching on sample UDIS-D/classical pairs.
+It **auto-discovers** checkpoints (`baseline`, `epoch0`, `latest_best` under
+`outputs/**/checkpoints/best.pth`), derives the descriptor dimension from each
+checkpoint and pads descriptors per model, so 256-d (zero-padded) and native
+128-d checkpoints can be compared side by side. Outputs are embedded; figures
+are also written to `notebooks/figures/`.
 
 ```bash
 pixi run lab   # interactive
@@ -191,10 +215,12 @@ pixi run jupyter nbconvert --to notebook --execute --inplace notebooks/matching_
 The ONNX matcher is forced to CPU inside the notebook because the training run
 occupies GPU1; the stitching network uses GPU1.
 
-## 8. Reference metrics (UDIS-D testing, 1,105 pairs)
+## 8. Reference metrics
 
 Metrics follow the paper's protocol: masked SSIM/PSNR between the two warped
 images on their overlap (`Codes/infer.py`, same as `Codes/test.py`).
+
+Full UDIS-D testing set (1,105 pairs, name-paired):
 
 | model | mSSIM | mPSNR |
 | --- | --- | --- |
@@ -202,7 +228,23 @@ images on their overlap (`Codes/infer.py`, same as `Codes/test.py`).
 | fine-tune A, end of epoch 0 | 0.8021 | 24.76 |
 | UniStitch paper (SuperPoint descriptors) | 0.813 | 25.07 |
 
+First 40 UDIS-D testing pairs (the validation subset used during training):
+
+| model | mSSIM |
+| --- | --- |
+| released checkpoint + ALIKED (warm start) | 0.8652 |
+| fine-tune A, end of epoch 0 | 0.8646 |
+| fine-tune A, end of epoch 2 (released as `...epoch2-ssim0.8649.pth`) | 0.8649 |
+
+So far the ALIKED warm-start fine-tune is at parity with the released model on
+UDIS-D (the semantic branch dominates); the classical cross-domain validation
+was slightly below baseline (0.590 vs 0.610 on the first 40 pairs). A native
+128-d variant (fine-tune C, truncated-stem warm start) is queued to test whether
+removing the zero-padded channels changes the outcome.
+
 `Codes/dataset.py` pairs `input1`/`input2` by file name; UDIS-D testing
 `input1` is missing `000001.jpg`, so index-based pairing (the original
 behaviour) shifted every validation pair by one and produced invalid metrics.
-Training data was unaffected (names are aligned there).
+Checkpoints whose filenames contain `ssim0.6785` / `ssim0.6983` predate that fix
+(`04381cd`); training itself was unaffected because UDIS-D training names are
+aligned.

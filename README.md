@@ -35,6 +35,7 @@ We use the UDIS dataset to train and evaluate our method. Please refer to **[UDI
 > ONNX keypoints (RaCo-ALIKED-LightGlue+ / ALIKED-LightGlue) and Hydra + AMUSE
 > fine-tuning are documented in **[docs/PIPELINE.md](docs/PIPELINE.md)**.
 > Quick start: `pixi install && pixi run keypoints --help && pixi run train`.
+> Fine-tuned ALIKED checkpoints: [release v0.1.0-aliked](https://github.com/yuki-inaho/UniStitch/releases/tag/v0.1.0-aliked).
 
 ---
 
