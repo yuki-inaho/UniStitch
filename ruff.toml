@@ -42,6 +42,7 @@ ignore = [
 "keypoint_tool/onnx_models.py" = ["F722", "F821", "UP037"]
 "keypoint_tool/onnx_keypoint_tool.py" = ["F722", "F821", "UP037"]
 "keypoint_tool/export_aliked_descriptor.py" = ["F722", "F821", "UP037"]
+"tools/analyze_matches_poses.py" = ["F722", "F821", "UP037"]
 
 [format]
 quote-style = "double"

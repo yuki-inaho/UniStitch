@@ -85,6 +85,23 @@ The database is written to `<data_path>/aliked_lmdb` with the exact key layout
 expected by `Codes/dataset.py` (`{index:08d}_{image_name}`). Runs are resumable
 (entries are committed every `--commit_every` pairs).
 
+### Datasets from sequential captures
+
+`tools/build_sequential_pairs.py` turns a sequential capture session (a folder
+with `Color_*.jpg` frames, e.g. the L76 tomato sessions) into a UniStitch
+dataset with `(frame_i, frame_i+stride)` pairs. The L76 camera is mounted
+sideways, so `--rotate ccw90` makes the images upright:
+
+```bash
+pixi run python tools/build_sequential_pairs.py \
+  --session /workspace/data/2026-0630-tmt4-02_OL_scepter_L76/NYX650_2026_06_30_17_46_20_1998 \
+  --output data/l76_s0 --tag s0 --stride 50 --rotate ccw90
+pixi run keypoints build --data_path data/l76_s0 --workers 2   # (GPU: see below)
+```
+
+With the L76 speed (~0.006 m/frame) a stride of 50 corresponds to an average
+baseline of ~0.3 m.
+
 ### GPU extraction (optional, much faster)
 
 The default install uses CPU ONNX Runtime. For GPU extraction install the CUDA

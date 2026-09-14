@@ -35,9 +35,9 @@ ruff = ">=0.6.0"
 ty = "*"
 
 [tasks]
-lint = "ruff check Codes keypoint_tool"
-format = "ruff format Codes keypoint_tool"
-typecheck = "ty check Codes/train.py Codes/infer.py Codes/dataset.py Codes/checkpoint_utils.py keypoint_tool/onnx_models.py keypoint_tool/onnx_keypoint_tool.py keypoint_tool/export_aliked_descriptor.py"
+lint = "ruff check Codes keypoint_tool tools"
+format = "ruff format Codes keypoint_tool tools"
+typecheck = "ty check Codes/train.py Codes/infer.py Codes/dataset.py Codes/checkpoint_utils.py keypoint_tool/onnx_models.py keypoint_tool/onnx_keypoint_tool.py keypoint_tool/export_aliked_descriptor.py tools/build_sequential_pairs.py tools/analyze_matches_poses.py"
 train = "python Codes/train.py"
 infer = "python Codes/infer.py"
 tensorboard = "tensorboard --logdir outputs"
