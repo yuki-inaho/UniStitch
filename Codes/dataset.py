@@ -71,6 +71,24 @@ class TrainDataset(Dataset):
                 self.datas[data_name]['image'] = glob.glob(os.path.join(data, '*.jpg'))
                 self.datas[data_name]['image'].sort()
         
+
+        # Pair input1/input2 by file name: the keypoint lmdb stores pairs by
+        # name, and dataset folders such as UDIS-D testing can have a missing
+        # file in input1 (000001.jpg) that shifts index-based pairing.
+        images1 = self.datas['input1']['image']
+        images2 = self.datas['input2']['image']
+        by_name = {os.path.basename(path): path for path in images2}
+        paired = []
+        for index, path1 in enumerate(images1):
+            path2 = by_name.get(os.path.basename(path1))
+            if path2 is None and index < len(images2):
+                path2 = images2[index]
+            if path2 is not None:
+                paired.append(path2)
+        self.datas['input2']['image'] = paired
+        if len(paired) != len(images1):
+            print(f"Warning: paired {len(paired)} of {len(images1)} samples")
+
         print("Dataset keys:", self.datas.keys())
         print("Total samples:", len(self))
 
@@ -278,6 +296,24 @@ class TestDataset(Dataset):
                
                 self.datas[data_name]['image'] = full_img_list
                 self.datas[data_name]['image'].sort()
+
+        # Pair input1/input2 by file name: the keypoint lmdb stores pairs by
+        # name, and dataset folders such as UDIS-D testing can have a missing
+        # file in input1 (000001.jpg) that shifts index-based pairing.
+        images1 = self.datas['input1']['image']
+        images2 = self.datas['input2']['image']
+        by_name = {os.path.basename(path): path for path in images2}
+        paired = []
+        for index, path1 in enumerate(images1):
+            path2 = by_name.get(os.path.basename(path1))
+            if path2 is None and index < len(images2):
+                path2 = images2[index]
+            if path2 is not None:
+                paired.append(path2)
+        self.datas['input2']['image'] = paired
+        if len(paired) != len(images1):
+            print(f"Warning: paired {len(paired)} of {len(images1)} samples")
+
         print("Test dataset keys:", self.datas.keys())
         print("Total test samples:", len(self))
 
