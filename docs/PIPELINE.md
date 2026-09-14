@@ -12,6 +12,15 @@ pixi install                       # creates .pixi/envs/default
 pixi run python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
 ```
 
+> **GTX 1070 / Pascal (sm_61) note** (branch `gtx1070`): current PyPI wheels no
+> longer execute on Pascal (`torch >= 2.11` ships CUDA 13 and the cu128 wheels
+> of 2.8-2.10 dropped sm_50-sm_60), so `pixi.toml` pins `torch==2.10.0` /
+> `torchvision==0.25.0` from `https://download.pytorch.org/whl/cu126`. On a
+> GTX 1070 `torch.cuda.get_arch_list()` reports
+> `['sm_50', 'sm_60', 'sm_70', ...]` and the sm_60 cubins run via minor-version
+> binary compatibility. See
+> [pytorch#157517](https://github.com/pytorch/pytorch/issues/157517).
+
 Key tasks:
 
 | task | command |
@@ -26,10 +35,15 @@ Key tasks:
 ## 2. Pretrained checkpoint
 
 ```bash
-mkdir -p model_homo_stage2
-curl -L -o model_homo_stage2/epoch_best_model.pth \
-  https://huggingface.co/Y5Y/UniStitch_model/resolve/main/epoch_best_model.pth
+pixi run download-models            # fine-tuned ALIKED release assets (sha256-verified)
+pixi run download-models --with-hf  # + the released SuperPoint model from Hugging Face
 ```
+
+| file | description |
+| --- | --- |
+| `unistitch-aliked-zeropad-epoch0.pth` | fine-tune, end of epoch 0 (AMUSE averaged iterate) |
+| `unistitch-aliked-zeropad-epoch2-ssim0.8649.pth` | current best; default for the app and tests |
+| `epoch_best_model.pth` (`--with-hf`) | released stage-2 SuperPoint checkpoint |
 
 The released checkpoint is a stage-2 model trained with 256-d SuperPoint
 descriptors (`point_backbone.pointnext_feat.encoder.stem.0.weight` has shape
@@ -191,7 +205,23 @@ pixi run jupyter nbconvert --to notebook --execute --inplace notebooks/matching_
 The ONNX matcher is forced to CPU inside the notebook because the training run
 occupies GPU1; the stitching network uses GPU1.
 
-## 8. Reference metrics (UDIS-D testing, 1,105 pairs)
+## 8. Gradio demo
+
+The demo stitches an arbitrary RGB pair in-process (ONNX matcher + network, see
+`Codes/pair_inference.py`):
+
+```bash
+pixi run download-models   # once
+pixi run app               # http://127.0.0.1:7860
+```
+
+- `samples/left.png` / `samples/right.png` are a deterministic procedural pair
+  (`pixi run samples` regenerates them); the UI resizes the inputs for matching
+  via the "最大辺" slider and serves/downloads the result as PNG.
+- Tests: `pixi run test-e2e` (GPU stitch test on the sample pair),
+  `pixi run test-app` (app layout/helpers) or `pixi run test` (everything).
+
+## 9. Reference metrics (UDIS-D testing, 1,105 pairs)
 
 Metrics follow the paper's protocol: masked SSIM/PSNR between the two warped
 images on their overlap (`Codes/infer.py`, same as `Codes/test.py`).

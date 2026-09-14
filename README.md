@@ -32,9 +32,10 @@ We use the UDIS dataset to train and evaluate our method. Please refer to **[UDI
 | tensorboard | >= 2.9.0 |
 
 > **pixi pipeline (this fork)**: a reproducible Pixi environment, self-contained
-> ONNX keypoints (RaCo-ALIKED-LightGlue+ / ALIKED-LightGlue) and Hydra + AMUSE
-> fine-tuning are documented in **[docs/PIPELINE.md](docs/PIPELINE.md)**.
-> Quick start: `pixi install && pixi run keypoints --help && pixi run train`.
+> ONNX keypoints (RaCo-ALIKED-LightGlue+ / ALIKED-LightGlue), Hydra + AMUSE
+> fine-tuning and a gradio demo are documented in **[docs/PIPELINE.md](docs/PIPELINE.md)**.
+> Quick start: `pixi install && pixi run download-models && pixi run app`
+> (GTX 1070/Pascal users: the `gtx1070` branch pins CUDA 12.6 wheels).
 
 ---
 

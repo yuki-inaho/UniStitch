@@ -9,8 +9,12 @@ python = "3.11.*"
 pip = "*"
 
 [pypi-dependencies]
-torch = ">=2.7.0"
-torchvision = ">=0.22.0"
+# GTX 1070 (sm_61, Pascal) cannot run the default PyPI wheels:
+# torch >= 2.11 ships CUDA 13 (Pascal removed) and the cu128 wheels of
+# 2.8-2.10 dropped sm_50-sm_60, so pin the CUDA 12.6 builds which still
+# support Pascal. See https://github.com/pytorch/pytorch/issues/157517
+torch = { version = "==2.10.0", index = "https://download.pytorch.org/whl/cu126" }
+torchvision = { version = "==0.25.0", index = "https://download.pytorch.org/whl/cu126" }
 numpy = ">=1.26.0,<3"
 opencv-python = ">=4.10.0"
 scikit-image = ">=0.24.0"
@@ -28,6 +32,7 @@ ipykernel = ">=6.29.0"
 nbformat = ">=5.10.0"
 nbconvert = ">=7.16.0"
 matplotlib = ">=3.8.0"
+gradio = ">=5.0.0,<6"  # demo app (app.py); gradio 5 supports Python 3.11
 # build/export + tooling (not needed for plain inference/training)
 onnx = ">=1.16.0"
 onnxscript = ">=0.1.0"
@@ -43,4 +48,9 @@ infer = "python Codes/infer.py"
 tensorboard = "tensorboard --logdir outputs"
 keypoints = "python keypoint_tool/onnx_keypoint_tool.py"
 test = "pytest"
+test-e2e = "pytest tests/test_pair_inference.py -v"
+test-app = "pytest tests/test_gradio_app.py -v"
+download-models = "bash scripts/download_models.sh"
+samples = "python scripts/make_sample_pair.py"
+app = "python app.py"
 lab = "jupyter lab --no-browser"
