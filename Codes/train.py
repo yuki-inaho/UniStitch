@@ -297,6 +297,7 @@ def train(cfg: DictConfig) -> None:
     start_epoch = 0
     glob_iter = 0
     best_score = 0.0
+    epochs_without_improvement = 0
     resume_checkpoint = None
     if cfg.checkpoint.resume:
         resume_checkpoint = torch.load(cfg.checkpoint.resume, map_location="cpu", weights_only=False)
@@ -304,6 +305,7 @@ def train(cfg: DictConfig) -> None:
         start_epoch = int(resume_checkpoint.get("epoch", 0))
         glob_iter = int(resume_checkpoint.get("glob_iter", 0))
         best_score = float(resume_checkpoint.get("best_ssim", 0.0))
+        epochs_without_improvement = int(resume_checkpoint.get("epochs_without_improvement", 0))
         print(f"resumed from {cfg.checkpoint.resume} (epoch {start_epoch}, iter {glob_iter})")
     elif cfg.checkpoint.pretrained:
         checkpoint = torch.load(cfg.checkpoint.pretrained, map_location="cpu", weights_only=False)
@@ -419,23 +421,49 @@ def train(cfg: DictConfig) -> None:
                         writer.add_scalar(f"val/ssim_{name}", score, epoch + 1)
 
             selection = scores.get("udis", scores.get("others", float("nan")))
+            early_stop_cfg = cfg.get("early_stop")
+            min_delta = float(early_stop_cfg.get("min_delta", 0.0)) if early_stop_cfg else 0.0
+            patience = int(early_stop_cfg.get("patience", 0)) if early_stop_cfg else 0
             state = {
                 "model": net.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "epoch": epoch + 1,
                 "glob_iter": glob_iter,
                 "best_ssim": max(best_score, selection if np.isfinite(selection) else 0.0),
+                "epochs_without_improvement": epochs_without_improvement,
                 "cfg": OmegaConf.to_container(cfg, resolve=True),
             }
-            if np.isfinite(selection) and selection > best_score:
+            if np.isfinite(selection) and selection > best_score + min_delta:
                 best_score = selection
+                epochs_without_improvement = 0
+                state["epochs_without_improvement"] = 0
                 path = keep_best.offer(selection, epoch + 1, state, torch)
                 print(f"saved best checkpoint: {path.name}")
+            elif np.isfinite(selection):
+                epochs_without_improvement += 1
+                state["epochs_without_improvement"] = epochs_without_improvement
+                if patience:
+                    print(
+                        f"epoch {epoch}: no improvement (+{min_delta}), patience {epochs_without_improvement}/{patience}"
+                    )
+            if writer is not None:
+                writer.add_scalar("val/epochs_without_improvement", epochs_without_improvement, epoch + 1)
             if cfg.save.keep_last:
                 torch.save(state, run_dir / "checkpoints" / "last.pth")
 
             if is_amuse:
                 optimizer.train()
+
+            if (
+                early_stop_cfg is not None
+                and early_stop_cfg.get("enabled", False)
+                and patience
+                and epochs_without_improvement >= patience
+            ):
+                print(
+                    f"early stopping after epoch {epoch} ({epochs_without_improvement} validations without improvement)"
+                )
+                break
     except KeyboardInterrupt:
         print("interrupted; saving last.pth")
         if is_amuse:
@@ -448,6 +476,7 @@ def train(cfg: DictConfig) -> None:
                     "epoch": start_epoch,
                     "glob_iter": glob_iter,
                     "best_ssim": best_score,
+                    "epochs_without_improvement": epochs_without_improvement,
                     "cfg": OmegaConf.to_container(cfg, resolve=True),
                 },
                 run_dir / "checkpoints" / "last.pth",

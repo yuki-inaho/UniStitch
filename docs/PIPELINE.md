@@ -160,6 +160,11 @@ overridden on the command line (`data.batch_size=8 optim.lr=0.01 epochs=5 ...`).
 - **Checkpoints**: only the `save.keep_best_k` best checkpoints by validation
   SSIM are kept (`checkpoints/best_epoch*_ssim*.pth`, with `best.pth` symlinked
   to the current best), plus `checkpoints/last.pth` for resuming.
+- **Early stopping**: `early_stop.enabled/patience/min_delta` stops the run when
+  the UDIS-D validation mSSIM fails to beat the best score by `min_delta` for
+  `patience` consecutive validations (default: 3 validations, 0.001 mSSIM). The
+  K-best checkpoints are kept. `epochs_without_improvement` is stored in the
+  checkpoint so resuming continues the counter.
 - **AMUSE**: parameters are split into a Muon group (hidden matrices) and an
   AdamW-style group (biases/norms/regression heads,
   `optim.head_param_patterns`). The optimizer's `train()`/`eval()` iterate

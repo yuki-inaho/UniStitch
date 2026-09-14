@@ -36,6 +36,11 @@ val:
   max_side: 1600 # resize validation images (original pixels) to bound GPU memory
   log_images: true
 
+early_stop:
+  enabled: true
+  patience: 3 # stop after this many validations without improving the best score
+  min_delta: 0.001 # minimum mSSIM improvement required to count as progress
+
 save:
   # Only the K best checkpoints (by validation SSIM) are kept on disk.
   keep_best_k: 3
